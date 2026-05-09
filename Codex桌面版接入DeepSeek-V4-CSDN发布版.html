@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>2026 Windows 环境 Codex 桌面版接入 DeepSeek V4 完整教程</title>
+</head>
+<body>
+
+<p><strong>摘要：</strong>免降级、免破解，通过本地代理让 Codex 最新桌面版与 DeepSeek API 稳定协作。</p>
+
+<hr />
+
+<h2>一、背景</h2>
+
+<p>OpenAI 的 <a href="https://github.com/openai/codex" target="_blank" rel="noopener">Codex</a> 是目前主流的 AI 编程助手之一，提供 CLI 与桌面应用。DeepSeek V4 在代码场景下性价比高、API 成本低。</p>
+
+<p><strong>两者无法直接对接</strong>，根本原因是接口协议不一致：</p>
+
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:720px;">
+<thead>
+<tr style="background:#f5f5f5;">
+<th>项目</th>
+<th>Codex（v0.81.0 及以上）</th>
+<th>DeepSeek API</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>协议</td>
+<td><strong>Responses API</strong></td>
+<td><strong>Chat Completions API</strong></td>
+</tr>
+<tr>
+<td>请求路径</td>
+<td>/v1/responses</td>
+<td>/v1/chat/completions</td>
+</tr>
+<tr>
+<td>工具调用</td>
+<td>tools 字段内联</td>
+<td>tool_calls 独立消息</td>
+</tr>
+</tbody>
+</table>
+
+<p>若直接把 <code>base_url</code> 设为 <code>https://api.deepseek.com/v1</code>，通常会返回 400。</p>
+
+<p><strong>解决思路：</strong>在本机部署轻量代理，在请求往返时做协议转换。</p>
+
+<hr />
+
+<h2>二、方案架构</h2>
+
+<p>数据流示意：</p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;line-height:1.5;">
+┌──────────────────┐         Responses API         ┌─────────────────┐
+│  Codex 桌面版     │ ──────────────────────────────▶│  codex-bridge    │
+│  (示例 v0.129.0)  │   Authorization: Bearer &lt;key&gt;  │  localhost:4000  │
+└──────────────────┘                                └────────┬────────┘
+                                                             │
+                                                    Chat Completions API
+                                                             │
+                                                             ▼
+                                                  ┌──────────────────┐
+                                                  │  DeepSeek API    │
+                                                  │  api.deepseek.com│
+                                                  └──────────────────┘
+</pre>
+
+<p>代理采用开源项目 <a href="https://github.com/wujfeng712-ui/codex-bridge" target="_blank" rel="noopener">codex-bridge</a>（Node.js 单文件、无额外依赖）。</p>
+
+<hr />
+
+<h2>三、环境要求</h2>
+
+<ul>
+<li><strong>操作系统：</strong>Windows 10 或 11</li>
+<li><strong>Node.js 18+</strong>（<a href="https://nodejs.org/" target="_blank" rel="noopener">官网下载</a>）</li>
+<li><strong>Codex 桌面版</strong>（<a href="https://github.com/openai/codex/releases" target="_blank" rel="noopener">Releases</a> 下载最新版即可，无需刻意降级）</li>
+<li><strong>DeepSeek API Key</strong>（<a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">控制台获取</a>）</li>
+<li>能使用 PowerShell 或 Git Bash 执行基本命令</li>
+</ul>
+
+<hr />
+
+<h2>四、操作步骤（按顺序执行）</h2>
+
+<h3>步骤 1：确认环境</h3>
+
+<p>打开终端（推荐 Git Bash），执行：</p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">node --version    # 应为 v18.0.0 或更高
+codex --version   # 应显示 codex-cli 版本号</pre>
+
+<h3>步骤 2：获取 codex-bridge</h3>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">git clone https://github.com/wujfeng712-ui/codex-bridge.git ~/.codex/codex-bridge</pre>
+
+<p><strong>说明：</strong>若访问 GitHub 不稳定，可改用镜像，例如：</p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">git clone https://gitcode.com/wujfeng712-ui/codex-bridge.git ~/.codex/codex-bridge</pre>
+
+<h3>步骤 3：配置代理环境变量</h3>
+
+<p>编辑路径（将「你的用户名」换成实际用户名）：</p>
+
+<p><code>C:\Users\你的用户名\.codex\codex-bridge\.env</code></p>
+
+<p>写入示例（请替换为自己的密钥）：</p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;"># === DeepSeek 上游密钥 ===
+DEEPSEEK_API_KEY=sk-你的DeepSeek密钥
+
+# === 暴露的模型列表 ===
+DEEPSEEK_MODELS=deepseek-v4-pro,deepseek-v4-flash,deepseek-reasoner
+
+# === 默认供应商 ===
+DEFAULT_PROVIDER=deepseek
+
+# === 日志级别 ===
+LOG_LEVEL=info</pre>
+
+<p><strong>安全提示：</strong>密钥一般不要加引号，直接写 <code>sk-xxx</code>。<code>.env</code> 含明文密钥，勿提交到 Git。</p>
+
+<h3>步骤 4：配置 Codex</h3>
+
+<p><strong>4.1 编辑配置文件</strong> <code>用户目录\.codex\config.toml</code></p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">cli_auth_credentials_store = "file"
+model = "deepseek-v4-pro"
+model_provider = "local_proxy"
+
+[model_providers.local_proxy]
+name = "local_proxy"
+base_url = "http://127.0.0.1:4000/v1"
+wire_api = "responses"
+requires_openai_auth = true</pre>
+
+<p><strong>要点：</strong><code>cli_auth_credentials_store = "file"</code> 让桌面版从文件读密钥，减少反复弹出浏览器登录的流程（具体行为以当前版本为准）。</p>
+
+<p><strong>4.2 编辑</strong> <code>用户目录\.codex\auth.json</code></p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">{
+  "auth_mode": "apikey",
+  "OPENAI_API_KEY": "sk-你的DeepSeek密钥"
+}</pre>
+
+<p><strong>注意：</strong>即使用自定义后端，字段名仍须为 <code>OPENAI_API_KEY</code>，这是 Codex 侧约定。</p>
+
+<p><strong>4.3 初始化登录状态</strong></p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">echo "sk-你的DeepSeek密钥" | codex login --with-api-key</pre>
+
+<p>成功时通常可见：<code>Successfully logged in</code></p>
+
+<p>可再执行：</p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">codex login status
+# 期望：Logged in using an API key - sk-***xxxx</pre>
+
+<h3>步骤 5：启动代理</h3>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">cd ~/.codex/codex-bridge
+node --env-file=.env proxy.mjs</pre>
+
+<p>出现类似输出即表示监听成功：</p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">[codex-bridge] Listening on http://localhost:4000
+[codex-bridge] Default provider: deepseek
+[codex-bridge] Deepseek: https://api.deepseek.com/v1 | models=deepseek-v4-pro, deepseek-v4-flash, deepseek-reasoner</pre>
+
+<p><strong>重要：</strong>保持该终端窗口不要关；关掉则代理停止。开机自启见文末「进阶技巧」。</p>
+
+<h3>步骤 6：打开 Codex 桌面版</h3>
+
+<p>从开始菜单或快捷方式启动。配置正确时，应能进入工作界面。</p>
+
+<h3>步骤 7：在对话里切换模型</h3>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">/model deepseek-v4-pro     # 偏推理，适合复杂编码
+/model deepseek-v4-flash   # 偏速度，适合轻量编辑</pre>
+
+<hr />
+
+<h2>五、验证整条链路</h2>
+
+<p>用 CLI 做一次端到端测试：</p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">codex exec "回复一个字：好"</pre>
+
+<p>输出中若出现模型为 <code>deepseek-v4-pro</code>、提供方为 <code>local_proxy</code>，且最后有单独一行「好」，说明链路正常。</p>
+
+<hr />
+
+<h2>六、常见问题</h2>
+
+<h3>Q1：桌面版仍要求登录 ChatGPT</h3>
+
+<p>可能与桌面版认证逻辑有关，可参考社区讨论：<a href="https://github.com/openai/codex/issues/2450" target="_blank" rel="noopener">Codex Issue #2450</a>。有用户通过 <strong>CC Switch</strong> 配置第三方供应商绕过：</p>
+
+<ol>
+<li>下载 <a href="https://github.com/farion1231/cc-switch/releases/latest" target="_blank" rel="noopener">CC Switch</a> 的安装包（如 .msi）</li>
+<li>安装后打开，进入 Codex 相关选项卡 → 添加供应商</li>
+<li>API Key：填 DeepSeek 密钥；Base URL：<code>http://127.0.0.1:4000/v1</code></li>
+<li>启用后重启 Codex</li>
+</ol>
+
+<h3>Q2：提示 wire_api = chat is no longer supported</h3>
+
+<p>自 Codex v0.81.0 起不再支持 <code>wire_api = "chat"</code>。请确认 <code>config.toml</code> 中为 <code>wire_api = "responses"</code>，由代理向下游转换为 Chat Completions。</p>
+
+<h3>Q3：端口 4000 被占用</h3>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">netstat -ano | findstr ":4000"
+taskkill /PID &lt;PID&gt; /F</pre>
+
+<p>也可在 <code>.env</code> 改端口，例如 <code>PROXY_PORT=4001</code>，并同步修改 <code>config.toml</code> 里的 <code>base_url</code>。</p>
+
+<h3>Q4：代理启动后连接超时</h3>
+
+<p>依次检查：DeepSeek Key 是否正确；本机能否访问 <code>https://api.deepseek.com</code>；防火墙是否拦截 Node.js。</p>
+
+<h3>Q5：关终端代理就停</h3>
+
+<p>见下文「代理开机自启」。</p>
+
+<hr />
+
+<h2>七、进阶技巧</h2>
+
+<h3>Windows 下代理开机自启</h3>
+
+<p><strong>方法一：任务计划程序（PowerShell 示例）</strong></p>
+
+<pre style="background:#f6f8fa;padding:14px;overflow:auto;">$action = New-ScheduledTaskAction -Execute "node" `
+  -Argument "--env-file=$env:USERPROFILE\.codex\codex-bridge\.env $env:USERPROFILE\.codex\codex-bridge\proxy.mjs" `
+  -WorkingDirectory "$env:USERPROFILE\.codex\codex-bridge"
+
+$trigger = New-ScheduledTaskTrigger -AtLogon
+
+Register-ScheduledTask -TaskName "CodexBridge" -Action $action -Trigger $trigger `
+  -Description "Codex → DeepSeek 协议代理" -RunLevel Highest</pre>
+
+<p><strong>方法二：启动文件夹快捷方式</strong></p>
+
+<p>文件夹路径：<code>%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup</code></p>
+
+<p>快捷方式「目标」：<code>node --env-file=.env proxy.mjs</code></p>
+
+<p>「起始位置」：<code>C:\Users\你的用户名\.codex\codex-bridge</code></p>
+
+<h3>多模型列表</h3>
+
+<p>在 <code>.env</code> 的 <code>DEEPSEEK_MODELS</code> 中维护逗号分隔列表，重启代理后可在 Codex 内用 <code>/model</code> 切换。</p>
+
+<hr />
+
+<h2>八、小结</h2>
+
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:720px;">
+<thead>
+<tr style="background:#f5f5f5;">
+<th>对比项</th>
+<th>本方案（本地代理）</th>
+<th>降级 Codex 到 0.80.0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Codex 版本</td>
+<td>可跟新版</td>
+<td>停留在旧版</td>
+</tr>
+<tr>
+<td>新特性</td>
+<td>通常可随新版获得</td>
+<td>受旧版限制</td>
+</tr>
+<tr>
+<td>维护与风险</td>
+<td>依赖代理项目维护</td>
+<td>旧版不再演进</td>
+</tr>
+<tr>
+<td>上手成本</td>
+<td>中等</td>
+<td>较低但功能受限</td>
+</tr>
+</tbody>
+</table>
+
+<p>整体上，用本地协议桥接可以在保留 Codex 新版能力的同时，使用 DeepSeek 的 API 定价与模型选择。</p>
+
+<hr />
+
+<p><strong>元信息（发布前请自行修改）</strong></p>
+
+<ul>
+<li>作者：【请填写】</li>
+<li>日期：2026-05-10</li>
+<li>参考版本：Codex v0.129.0 / codex-bridge v1.0.0 / DeepSeek V4（实际以你本机为准）</li>
+</ul>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="https://github.com/wujfeng712-ui/codex-bridge" target="_blank" rel="noopener">codex-bridge</a></li>
+<li><a href="https://github.com/openai/codex" target="_blank" rel="noopener">Codex 官方仓库</a></li>
+<li><a href="https://platform.deepseek.com/api-docs" target="_blank" rel="noopener">DeepSeek API 文档</a></li>
+<li><a href="https://github.com/farion1231/cc-switch" target="_blank" rel="noopener">CC Switch</a></li>
+<li><a href="https://github.com/openai/codex/issues/2450" target="_blank" rel="noopener">Issue #2450（登录相关）</a></li>
+</ul>
+
+</body>
+</html>
